@@ -10,7 +10,7 @@ from django.db.models import Q
 
 from .models import (
     User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption,
-    LivreurPosition, Notification, Conversation, Message,
+    LivreurPosition, Notification, Conversation, Message, OTPCode,
 )
 from .serializers import (
     CustomTokenObtainPairSerializer, RegisterSerializer, UserSerializer,
@@ -18,9 +18,11 @@ from .serializers import (
     LivreurProfileSerializer, CoursierProfileSerializer, UserPublicSerializer,
     AddressSerializer, PromoCodeSerializer, PromoRedemptionSerializer,
     LivreurPositionSerializer, NotificationSerializer, ConversationSerializer, MessageSerializer,
+    PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
+    EmailChangeRequestSerializer, EmailChangeConfirmSerializer,
 )
 from .permissions import IsAdmin, IsOwnerOrAdmin, IsLivreurOrAdmin, IsConversationParticipant
-from .services import validate_and_apply_promo, open_conversation, validate_order_reference
+from .services import validate_and_apply_promo, open_conversation, validate_order_reference, consume_otp
 
 
 class LoginView(TokenObtainPairView):
@@ -74,6 +76,89 @@ class ChangePasswordView(generics.UpdateAPIView):
         user.set_password(serializer.validated_data['new_password'])
         user.save()
         return Response({'message': 'Mot de passe modifié avec succès.'})
+
+
+class PasswordResetRequestView(generics.GenericAPIView):
+    """Mot de passe oublié - étape 1 : envoie un code OTP (simulé) à l'email du compte."""
+    serializer_class = PasswordResetRequestSerializer
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        try:
+            user = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            return Response({'error': 'Aucun compte associé à cet email.'}, status=404)
+
+        otp = OTPCode.issue(user, OTPCode.Purpose.PASSWORD_RESET)
+        return Response({
+            'message': f"Code envoyé par email à {email} (simulation).",
+            'simulated_otp': otp.code,
+        })
+
+
+class PasswordResetConfirmView(generics.GenericAPIView):
+    """Mot de passe oublié - étape 2 : valide le code OTP et applique le nouveau mot de passe."""
+    serializer_class = PasswordResetConfirmSerializer
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            user = User.objects.get(email__iexact=data['email'])
+        except User.DoesNotExist:
+            return Response({'error': 'Aucun compte associé à cet email.'}, status=404)
+
+        otp = consume_otp(user, OTPCode.Purpose.PASSWORD_RESET, data['otp_code'])
+        if not otp:
+            return Response({'error': 'Code invalide ou expiré.'}, status=400)
+
+        user.set_password(data['new_password'])
+        user.save()
+        return Response({'message': 'Mot de passe réinitialisé avec succès.'})
+
+
+class EmailChangeRequestView(generics.GenericAPIView):
+    """
+    Changement d'email (connecté) - étape 1 : vérifie l'adresse actuelle et
+    la disponibilité de la nouvelle, puis envoie un code OTP (simulé) dessus.
+    L'email du compte n'est pas modifié tant que ce code n'est pas confirmé.
+    """
+    serializer_class = EmailChangeRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        new_email = serializer.validated_data['new_email']
+
+        otp = OTPCode.issue(request.user, OTPCode.Purpose.EMAIL_CHANGE, target_email=new_email)
+        return Response({
+            'message': f"Code de validation envoyé à {new_email} (simulation).",
+            'simulated_otp': otp.code,
+        })
+
+
+class EmailChangeConfirmView(generics.GenericAPIView):
+    """Changement d'email (connecté) - étape 2 : valide le code et applique la nouvelle adresse."""
+    serializer_class = EmailChangeConfirmSerializer
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        otp = consume_otp(request.user, OTPCode.Purpose.EMAIL_CHANGE, serializer.validated_data['otp_code'])
+        if not otp or not otp.target_email:
+            return Response({'error': 'Code invalide ou expiré.'}, status=400)
+
+        request.user.email = otp.target_email
+        request.user.save(update_fields=['email'])
+        return Response(UserSerializer(request.user).data)
 
 
 class LogoutView(generics.GenericAPIView):

@@ -7,6 +7,8 @@ from .views import (
     LogoutView, LivreurListView, AdminUserViewSet,
     AddressViewSet, PromoCodeValidateView, PromoCodeViewSet, PromoRedemptionViewSet,
     LivreurPositionUpdateView, NotificationViewSet, ConversationOpenView, MessageViewSet,
+    PasswordResetRequestView, PasswordResetConfirmView,
+    EmailChangeRequestView, EmailChangeConfirmView,
 )
 
 router = DefaultRouter()
@@ -26,6 +28,12 @@ urlpatterns = [
     # Profil
     path('me/', MeView.as_view(), name='me'),
     path('me/change-password/', ChangePasswordView.as_view(), name='change-password'),
+    path('me/email-change/request/', EmailChangeRequestView.as_view(), name='email-change-request'),
+    path('me/email-change/confirm/', EmailChangeConfirmView.as_view(), name='email-change-confirm'),
+
+    # Mot de passe oublié
+    path('password-reset/request/', PasswordResetRequestView.as_view(), name='password-reset-request'),
+    path('password-reset/confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
 
     # Ressource partagée inter-services
     path('livreurs/available/', LivreurListView.as_view(), name='livreurs-available'),

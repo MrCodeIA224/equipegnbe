@@ -14,7 +14,7 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import PromoCode, PromoRedemption, LivreurPosition, Notification, Conversation
+from .models import PromoCode, PromoRedemption, LivreurPosition, Notification, Conversation, OTPCode
 
 
 def validate_and_apply_promo(code, user, order_type, subtotal):
@@ -100,6 +100,23 @@ def notify(user_id, title, message, notification_type='SYSTEM', order_type='', o
         recipient_id=user_id, title=title, message=message,
         notification_type=notification_type, order_type=order_type, order_id=order_id,
     )
+
+
+def consume_otp(user, purpose, code):
+    """
+    Valide le dernier code OTP actif d'un utilisateur pour un usage donné
+    (réinitialisation mot de passe, changement d'email) et le marque comme
+    utilisé s'il est valide, pour empêcher toute réutilisation. Retourne
+    l'OTPCode si valide, None sinon (code inconnu, déjà utilisé ou expiré).
+    """
+    otp = OTPCode.objects.using('default').filter(
+        user=user, purpose=purpose, code=code, is_used=False
+    ).order_by('-created_at').first()
+    if not otp or not otp.is_valid():
+        return None
+    otp.is_used = True
+    otp.save(using='default', update_fields=['is_used'])
+    return otp
 
 
 # Dispatch order_type -> (db alias, modèle, champs client_id/livreur_id/coursier_id).

@@ -4,7 +4,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth import get_user_model
 from .models import (
     User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption,
-    LivreurPosition, Notification, Conversation, Message,
+    LivreurPosition, Notification, Conversation, Message, OTPCode,
 )
 
 
@@ -137,6 +137,51 @@ class ChangePasswordSerializer(serializers.Serializer):
         if not user.check_password(value):
             raise serializers.ValidationError('Mot de passe actuel incorrect.')
         return value
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    otp_code = serializers.CharField()
+    new_password = serializers.CharField(required=True, validators=[validate_password])
+    new_password2 = serializers.CharField(required=True)
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['new_password2']:
+            raise serializers.ValidationError({'new_password2': 'Les mots de passe ne correspondent pas.'})
+        return attrs
+
+
+class EmailChangeRequestSerializer(serializers.Serializer):
+    """
+    Demande le changement d'email d'un utilisateur connecté : l'adresse
+    actuelle sert de confirmation (l'utilisateur doit la ressaisir), la
+    nouvelle adresse ne devient effective qu'après validation du code OTP
+    envoyé dessus (voir EmailChangeConfirmSerializer / EmailChangeConfirmView).
+    """
+    current_email = serializers.EmailField()
+    new_email = serializers.EmailField()
+
+    def validate_current_email(self, value):
+        user = self.context['request'].user
+        if value.lower() != user.email.lower():
+            raise serializers.ValidationError("Cette adresse ne correspond pas à votre compte actuel.")
+        return value
+
+    def validate_new_email(self, value):
+        user = self.context['request'].user
+        if value.lower() == user.email.lower():
+            raise serializers.ValidationError("La nouvelle adresse doit être différente de l'actuelle.")
+        if User.objects.exclude(id=user.id).filter(email__iexact=value).exists():
+            raise serializers.ValidationError('Cette adresse email est déjà utilisée par un autre compte.')
+        return value
+
+
+class EmailChangeConfirmSerializer(serializers.Serializer):
+    otp_code = serializers.CharField()
 
 
 class AdminUserSerializer(serializers.ModelSerializer):

@@ -2,8 +2,12 @@
 Service Authentification - Modèles utilisateurs GnExpress
 Gère tous les types d'acteurs de la plateforme.
 """
+import random
+from datetime import timedelta
+
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
 from config.constants import GUINEA_CITIES
 
 
@@ -311,3 +315,44 @@ class Message(models.Model):
 
     def __str__(self):
         return f"{self.sender.username}: {self.body[:40]}"
+
+
+class OTPCode(models.Model):
+    """
+    Code de vérification à usage unique, envoyé par email (simulé - aucun
+    backend d'envoi réel n'est configuré, voir apps/common/payment_providers.py
+    pour le même principe côté Mobile Money) : mot de passe oublié, et
+    validation d'une nouvelle adresse email avant de l'appliquer au compte.
+    """
+
+    class Purpose(models.TextChoices):
+        PASSWORD_RESET = 'PASSWORD_RESET', 'Réinitialisation mot de passe'
+        EMAIL_CHANGE = 'EMAIL_CHANGE', 'Changement email'
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='otp_codes')
+    purpose = models.CharField(max_length=20, choices=Purpose.choices)
+    code = models.CharField(max_length=4)
+    # Adresse en attente de validation (changement email uniquement) : le
+    # compte n'est mis à jour qu'après confirmation du code.
+    target_email = models.EmailField(blank=True, verbose_name='Nouvelle adresse (en attente)')
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_used = models.BooleanField(default=False)
+
+    class Meta:
+        verbose_name = 'Code OTP'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.username} - {self.purpose} ({'utilisé' if self.is_used else 'actif'})"
+
+    @classmethod
+    def issue(cls, user, purpose, target_email='', validity_minutes=10):
+        code = f"{random.randint(0, 9999):04d}"
+        return cls.objects.create(
+            user=user, purpose=purpose, code=code, target_email=target_email,
+            expires_at=timezone.now() + timedelta(minutes=validity_minutes),
+        )
+
+    def is_valid(self):
+        return not self.is_used and timezone.now() < self.expires_at

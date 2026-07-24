@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from .models import (
     User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption,
-    LivreurPosition, Notification, Conversation, Message,
+    LivreurPosition, Notification, Conversation, Message, OTPCode,
 )
 
 
@@ -128,3 +128,10 @@ class ConversationAdmin(admin.ModelAdmin):
 class MessageAdmin(admin.ModelAdmin):
     list_display = ['conversation', 'sender', 'body', 'created_at']
     search_fields = ['sender__username', 'body']
+
+
+@admin.register(OTPCode)
+class OTPCodeAdmin(admin.ModelAdmin):
+    list_display = ['user', 'purpose', 'code', 'target_email', 'is_used', 'expires_at', 'created_at']
+    list_filter = ['purpose', 'is_used']
+    search_fields = ['user__username', 'user__email', 'target_email']
