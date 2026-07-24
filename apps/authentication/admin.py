@@ -1,6 +1,9 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption
+from .models import (
+    User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption,
+    LivreurPosition, Notification, Conversation, Message,
+)
 
 
 class LivreurProfileInline(admin.StackedInline):
@@ -99,3 +102,29 @@ class PromoRedemptionAdmin(admin.ModelAdmin):
     list_display = ['promo_code', 'user', 'order_type', 'order_id', 'discount_amount', 'redeemed_at']
     list_filter = ['order_type']
     search_fields = ['promo_code__code', 'user__username']
+
+
+@admin.register(LivreurPosition)
+class LivreurPositionAdmin(admin.ModelAdmin):
+    list_display = ['livreur', 'latitude', 'longitude', 'current_order_type', 'updated_at']
+    search_fields = ['livreur__username']
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ['recipient', 'title', 'notification_type', 'is_read', 'created_at']
+    list_filter = ['notification_type', 'is_read']
+    search_fields = ['recipient__username', 'title']
+
+
+@admin.register(Conversation)
+class ConversationAdmin(admin.ModelAdmin):
+    list_display = ['order_type', 'order_id', 'client', 'assignee', 'created_at']
+    list_filter = ['order_type']
+    search_fields = ['client__username', 'assignee__username']
+
+
+@admin.register(Message)
+class MessageAdmin(admin.ModelAdmin):
+    list_display = ['conversation', 'sender', 'body', 'created_at']
+    search_fields = ['sender__username', 'body']

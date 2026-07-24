@@ -6,6 +6,7 @@ from .views import (
     LoginView, RegisterView, MeView, ChangePasswordView,
     LogoutView, LivreurListView, AdminUserViewSet,
     AddressViewSet, PromoCodeValidateView, PromoCodeViewSet, PromoRedemptionViewSet,
+    LivreurPositionUpdateView, NotificationViewSet, ConversationOpenView, MessageViewSet,
 )
 
 router = DefaultRouter()
@@ -13,6 +14,7 @@ router.register(r'admin/users', AdminUserViewSet, basename='admin-users')
 router.register(r'addresses', AddressViewSet, basename='address')
 router.register(r'admin/promo-codes', PromoCodeViewSet, basename='admin-promo-codes')
 router.register(r'admin/promo-redemptions', PromoRedemptionViewSet, basename='admin-promo-redemptions')
+router.register(r'notifications', NotificationViewSet, basename='notification')
 
 urlpatterns = [
     # Auth
@@ -30,6 +32,14 @@ urlpatterns = [
 
     # Codes promo (checkout, cross-service)
     path('promo-codes/validate/', PromoCodeValidateView.as_view(), name='promo-code-validate'),
+
+    # Suivi position livreur (cross-service)
+    path('livreurs/position/', LivreurPositionUpdateView.as_view(), name='livreur-position-update'),
+
+    # Chat par commande (cross-service)
+    path('conversations/open/', ConversationOpenView.as_view(), name='conversation-open'),
+    path('conversations/<int:conversation_pk>/messages/',
+         MessageViewSet.as_view({'get': 'list', 'post': 'create'}), name='conversation-messages'),
 
     # Admin
     path('', include(router.urls)),

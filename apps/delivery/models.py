@@ -34,6 +34,8 @@ class Restaurant(models.Model):
     description = models.TextField(verbose_name='Description')
     address = models.CharField(max_length=300, verbose_name='Adresse')
     city = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry')
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, verbose_name='Latitude')
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, verbose_name='Longitude')
     phone = models.CharField(max_length=20)
     image = models.ImageField(upload_to='restaurants/', blank=True, null=True)
     banner = models.ImageField(upload_to='restaurants/banners/', blank=True, null=True)

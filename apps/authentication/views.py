@@ -8,15 +8,19 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Q
 
-from .models import User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption
+from .models import (
+    User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption,
+    LivreurPosition, Notification, Conversation, Message,
+)
 from .serializers import (
     CustomTokenObtainPairSerializer, RegisterSerializer, UserSerializer,
     ChangePasswordSerializer, AdminUserSerializer, LivreurPublicSerializer,
     LivreurProfileSerializer, CoursierProfileSerializer, UserPublicSerializer,
     AddressSerializer, PromoCodeSerializer, PromoRedemptionSerializer,
+    LivreurPositionSerializer, NotificationSerializer, ConversationSerializer, MessageSerializer,
 )
-from .permissions import IsAdmin, IsOwnerOrAdmin
-from .services import validate_and_apply_promo
+from .permissions import IsAdmin, IsOwnerOrAdmin, IsLivreurOrAdmin, IsConversationParticipant
+from .services import validate_and_apply_promo, open_conversation
 
 
 class LoginView(TokenObtainPairView):
@@ -205,3 +209,94 @@ class PromoRedemptionViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = PromoRedemptionSerializer
     permission_classes = [IsAdmin]
     queryset = PromoRedemption.objects.select_related('promo_code', 'user').all()
+
+
+class LivreurPositionUpdateView(generics.GenericAPIView):
+    """Le livreur pousse sa position GPS courante (upsert)."""
+    permission_classes = [IsLivreurOrAdmin]
+
+    def post(self, request):
+        latitude = request.data.get('latitude')
+        longitude = request.data.get('longitude')
+        if latitude is None or longitude is None:
+            return Response({'error': 'latitude et longitude requis.'}, status=400)
+
+        livreur_id = request.data.get('livreur_id') if request.user.is_admin else request.user.id
+        LivreurPosition.objects.update_or_create(
+            livreur_id=livreur_id,
+            defaults={
+                'latitude': latitude,
+                'longitude': longitude,
+                'current_order_type': request.data.get('order_type', ''),
+                'current_order_id': request.data.get('order_id'),
+            },
+        )
+        return Response({'message': 'Position mise à jour.'})
+
+
+class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
+    """Notifications de l'utilisateur connecté."""
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Notification.objects.filter(recipient=self.request.user)
+
+    @action(detail=False, methods=['get'])
+    def unread_count(self, request):
+        count = self.get_queryset().filter(is_read=False).count()
+        return Response({'unread_count': count})
+
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        notification = self.get_object()
+        notification.is_read = True
+        notification.save()
+        return Response({'is_read': True})
+
+    @action(detail=False, methods=['post'])
+    def mark_all_read(self, request):
+        updated = self.get_queryset().filter(is_read=False).update(is_read=True)
+        return Response({'updated': updated})
+
+
+class ConversationOpenView(generics.GenericAPIView):
+    """Ouvre (ou récupère) la conversation client↔assigné d'une commande."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        order_type = request.data.get('order_type')
+        order_id = request.data.get('order_id')
+        if not order_type or not order_id:
+            return Response({'error': 'order_type et order_id requis.'}, status=400)
+
+        conversation = open_conversation(order_type, order_id, request.user.id)
+        return Response(ConversationSerializer(conversation).data)
+
+
+class MessageViewSet(viewsets.ModelViewSet):
+    """Messages d'une conversation - lecture/écriture réservées aux participants."""
+    serializer_class = MessageSerializer
+    permission_classes = [IsAuthenticated, IsConversationParticipant]
+    http_method_names = ['get', 'post']
+
+    def get_queryset(self):
+        conversation_id = self.kwargs.get('conversation_pk')
+        return Message.objects.filter(conversation_id=conversation_id).select_related('sender')
+
+    def get_conversation(self):
+        from django.shortcuts import get_object_or_404
+        conversation = get_object_or_404(Conversation, id=self.kwargs.get('conversation_pk'))
+        self.check_object_permissions(self.request, conversation)
+        return conversation
+
+    def list(self, request, *args, **kwargs):
+        self.get_conversation()
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        conversation = self.get_conversation()
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(conversation=conversation, sender=request.user)
+        return Response(serializer.data, status=201)

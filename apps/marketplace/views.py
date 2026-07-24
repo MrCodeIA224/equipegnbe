@@ -14,6 +14,7 @@ from .serializers import (
 )
 from apps.authentication.permissions import IsAdmin, IsBoutiquierrOrAdmin, IsLivreurOrAdmin
 from apps.common.payment_providers import get_provider
+from apps.authentication.services import get_livreur_position, notify
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -169,6 +170,11 @@ class MarketplaceOrderViewSet(viewsets.ModelViewSet):
         serializer = CreateMarketplaceOrderSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         order = serializer.save()
+        notify(
+            order.shop.owner_id, 'Nouvelle commande reçue',
+            f"Commande #{order.id} - {order.items_total} GNF",
+            notification_type='ORDER_STATUS', order_type='MARKETPLACE', order_id=order.id,
+        )
         return Response(MarketplaceOrderSerializer(order).data, status=201)
 
     @action(detail=True, methods=['post'])
@@ -224,6 +230,18 @@ class MarketplaceOrderViewSet(viewsets.ModelViewSet):
             # Boutique confirme l'annulation du livreur → libérer la commande
             order.livreur_id = None
         order.save(using='marketplace_db')
+        if new_status == 'CONFIRMED':
+            notify(
+                order.client_id, 'Commande confirmée',
+                f"{order.shop.name} a confirmé votre commande #{order.id}.",
+                notification_type='ORDER_STATUS', order_type='MARKETPLACE', order_id=order.id,
+            )
+        elif new_status == 'DELIVERED':
+            notify(
+                order.client_id, 'Commande livrée',
+                f"Votre commande #{order.id} chez {order.shop.name} a été livrée.",
+                notification_type='ORDER_STATUS', order_type='MARKETPLACE', order_id=order.id,
+            )
         return Response(MarketplaceOrderSerializer(order).data)
 
     @action(detail=True, methods=['post'])
@@ -246,6 +264,11 @@ class MarketplaceOrderViewSet(viewsets.ModelViewSet):
                 order.livreur_id = user.id
                 order.status = MarketplaceOrder.Status.DELIVERING
                 order.save(using='marketplace_db')
+                notify(
+                    order.client_id, 'Livreur assigné',
+                    f"Un livreur a pris en charge votre commande #{order.id}.",
+                    notification_type='ORDER_STATUS', order_type='MARKETPLACE', order_id=order.id,
+                )
                 return Response(MarketplaceOrderSerializer(order).data)
             else:
                 return Response({'error': 'Permission refusée.'}, status=403)
@@ -262,6 +285,11 @@ class MarketplaceOrderViewSet(viewsets.ModelViewSet):
 
         order.livreur_id = livreur_id
         order.save(using='marketplace_db')
+        notify(
+            order.client_id, 'Livreur assigné',
+            f"Un livreur a pris en charge votre commande #{order.id}.",
+            notification_type='ORDER_STATUS', order_type='MARKETPLACE', order_id=order.id,
+        )
         return Response(MarketplaceOrderSerializer(order).data)
 
     @action(detail=True, methods=['post'], url_path='payment/initiate')
@@ -348,7 +376,23 @@ class MarketplaceOrderViewSet(viewsets.ModelViewSet):
 
         order.status = MarketplaceOrder.Status.LIVREUR_CANCELLED
         order.save(using='marketplace_db')
+        notify(
+            order.shop.owner_id, 'Livraison annulée par le livreur',
+            f"Le livreur a annulé la commande #{order.id} — confirmation requise.",
+            notification_type='ORDER_STATUS', order_type='MARKETPLACE', order_id=order.id,
+        )
         return Response(MarketplaceOrderSerializer(order).data)
+
+    @action(detail=True, methods=['get'], url_path='livreur-position')
+    def livreur_position(self, request, pk=None):
+        """Position GPS du livreur assigné à cette commande (scopée via get_queryset)."""
+        order = self.get_object()
+        if not order.livreur_id:
+            return Response({'error': 'Aucun livreur assigné.'}, status=400)
+        position = get_livreur_position(order.livreur_id)
+        if not position:
+            return Response(None)
+        return Response(position)
 
     @action(detail=False, methods=['get'])
     def available_for_delivery(self, request):

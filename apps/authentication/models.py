@@ -7,6 +7,19 @@ from django.db import models
 from config.constants import GUINEA_CITIES
 
 
+class OrderType(models.TextChoices):
+    """
+    Type de commande référencée par un modèle cross-service (PromoRedemption,
+    LivreurPosition, Notification, Conversation...). Partagé pour éviter de
+    redéfinir les mêmes 3 choix dans chaque modèle qui référence une commande
+    par (order_type, order_id) plutôt que par FK - voir la note sur le routage
+    multi-bases dans PromoRedemption ci-dessous.
+    """
+    DELIVERY = 'DELIVERY', 'Livraison'
+    MARKET = 'MARKET', 'Mon Marché'
+    MARKETPLACE = 'MARKETPLACE', 'Boutiques'
+
+
 class User(AbstractUser):
     """
     Modèle utilisateur centralisé.
@@ -136,6 +149,8 @@ class Address(models.Model):
     label = models.CharField(max_length=50, verbose_name='Libellé', help_text='Ex: Maison, Bureau...')
     full_address = models.TextField(verbose_name='Adresse complète')
     city = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry', verbose_name='Ville')
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, verbose_name='Latitude')
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, verbose_name='Longitude')
     is_default = models.BooleanField(default=False, verbose_name='Adresse par défaut')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -151,6 +166,30 @@ class Address(models.Model):
         super().save(*args, **kwargs)
         if self.is_default:
             Address.objects.filter(user=self.user, is_default=True).exclude(pk=self.pk).update(is_default=False)
+
+
+class LivreurPosition(models.Model):
+    """
+    Dernière position GPS connue d'un livreur, partagée pendant une livraison
+    en cours. User et LivreurPosition vivent tous deux dans `default` : la
+    OneToOneField est une vraie FK (légale, même base) - contrairement aux
+    références de commandes cross-db (order_type/order_id bruts) utilisées
+    ailleurs, car ici pas de traversée de base.
+    """
+
+    livreur = models.OneToOneField(User, on_delete=models.CASCADE, related_name='live_position')
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    # Informatif uniquement (debug/admin) - jamais utilisé pour une décision de permission.
+    current_order_type = models.CharField(max_length=20, choices=OrderType.choices, blank=True)
+    current_order_id = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Position livreur'
+
+    def __str__(self):
+        return f"Position de {self.livreur.get_full_name()} ({self.updated_at:%H:%M:%S})"
 
 
 class PromoCode(models.Model):
@@ -187,11 +226,6 @@ class PromoCode(models.Model):
 class PromoRedemption(models.Model):
     """Trace d'utilisation d'un code promo sur une commande (cross-service)."""
 
-    class OrderType(models.TextChoices):
-        DELIVERY = 'DELIVERY', 'Livraison'
-        MARKET = 'MARKET', 'Mon Marché'
-        MARKETPLACE = 'MARKETPLACE', 'Boutiques'
-
     promo_code = models.ForeignKey(PromoCode, on_delete=models.CASCADE, related_name='redemptions')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='promo_redemptions')
     order_type = models.CharField(max_length=20, choices=OrderType.choices)
@@ -209,3 +243,71 @@ class PromoRedemption(models.Model):
 
     def __str__(self):
         return f"{self.promo_code.code} - {self.user.username} ({self.order_type} #{self.order_id})"
+
+
+class Notification(models.Model):
+    """Notification in-app pour un utilisateur, déclenchée par un événement
+    métier (changement de statut, offre reçue...) dans n'importe quel service."""
+
+    class NotificationType(models.TextChoices):
+        ORDER_STATUS = 'ORDER_STATUS', 'Statut de commande'
+        OFFER = 'OFFER', 'Offre'
+        SYSTEM = 'SYSTEM', 'Système'
+
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    title = models.CharField(max_length=200)
+    message = models.TextField()
+    notification_type = models.CharField(max_length=20, choices=NotificationType.choices, default=NotificationType.SYSTEM)
+    # Référence cross-service en champs bruts, comme PromoRedemption.
+    order_type = models.CharField(max_length=20, choices=OrderType.choices, blank=True)
+    order_id = models.IntegerField(null=True, blank=True)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Notification'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.title} → {self.recipient.username}"
+
+
+class Conversation(models.Model):
+    """
+    Fil de discussion entre un client et l'acteur qui lui est assigné
+    (livreur ou coursier) sur une commande donnée. unique_together porte sur
+    (order_type, order_id, assignee) et non (order_type, order_id) seul :
+    une MarketRequest a deux rôles assignés successifs (coursier pendant les
+    courses, puis livreur pour la livraison finale), donc deux conversations
+    distinctes légitimes peuvent exister pour la même demande.
+    """
+
+    order_type = models.CharField(max_length=20, choices=OrderType.choices)
+    order_id = models.IntegerField()
+    client = models.ForeignKey(User, on_delete=models.CASCADE, related_name='client_conversations')
+    assignee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='assigned_conversations')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Conversation'
+        unique_together = ['order_type', 'order_id', 'assignee']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.order_type} #{self.order_id} : {self.client.username} ↔ {self.assignee.username}"
+
+
+class Message(models.Model):
+    """Message individuel dans une Conversation."""
+
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='messages')
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Message'
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.sender.username}: {self.body[:40]}"

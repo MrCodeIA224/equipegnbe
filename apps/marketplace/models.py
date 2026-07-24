@@ -37,6 +37,8 @@ class Shop(models.Model):
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, related_name='shops')
     address = models.CharField(max_length=300)
     city = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry')
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, verbose_name='Latitude')
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, verbose_name='Longitude')
     phone = models.CharField(max_length=20)
     whatsapp = models.CharField(max_length=20, blank=True)
     image = models.ImageField(upload_to='shops/', blank=True, null=True)

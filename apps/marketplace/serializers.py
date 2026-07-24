@@ -39,7 +39,7 @@ class ShopSerializer(serializers.ModelSerializer):
         model = Shop
         fields = [
             'id', 'name', 'description', 'category', 'category_name',
-            'address', 'city', 'phone', 'whatsapp', 'image', 'banner',
+            'address', 'city', 'latitude', 'longitude', 'phone', 'whatsapp', 'image', 'banner',
             'is_active', 'has_delivery', 'delivery_fee', 'rating', 'total_sales',
             'owner_id', 'owner_name', 'created_at', 'products', 'products_count'
         ]
@@ -62,7 +62,7 @@ class ShopListSerializer(serializers.ModelSerializer):
         model = Shop
         fields = [
             'id', 'name', 'description', 'category', 'category_name',
-            'city', 'image', 'is_active', 'has_delivery',
+            'city', 'latitude', 'longitude', 'image', 'is_active', 'has_delivery',
             'delivery_fee', 'rating', 'total_sales', 'products_count'
         ]
 

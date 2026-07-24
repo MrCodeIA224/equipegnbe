@@ -13,6 +13,7 @@ from .serializers import (
     UpdateMarketItemsSerializer, MarketRatingSerializer
 )
 from apps.authentication.permissions import IsAdmin, IsCoursierOrAdmin
+from apps.authentication.services import get_livreur_position, notify
 
 
 class MarketRequestViewSet(viewsets.ModelViewSet):
@@ -75,6 +76,11 @@ class MarketRequestViewSet(viewsets.ModelViewSet):
             message=request.data.get('message', ''),
             proposed_fee=request.data.get('proposed_fee', 0)
         )
+        notify(
+            market_request.client_id, 'Nouvelle offre reçue',
+            f"Un coursier a proposé de faire vos courses pour {market_request.title}.",
+            notification_type='OFFER', order_type='MARKET', order_id=market_request.id,
+        )
         return Response(CoursierOfferSerializer(offer).data, status=201)
 
     @action(detail=True, methods=['post'])
@@ -102,6 +108,11 @@ class MarketRequestViewSet(viewsets.ModelViewSet):
         market_request.status = 'ASSIGNED'
         market_request.save(using='market_db')
 
+        notify(
+            offer.coursier_id, 'Offre acceptée',
+            f"Votre offre pour '{market_request.title}' a été acceptée.",
+            notification_type='OFFER', order_type='MARKET', order_id=market_request.id,
+        )
         return Response(MarketRequestSerializer(market_request).data)
 
     @action(detail=True, methods=['post'])
@@ -140,6 +151,12 @@ class MarketRequestViewSet(viewsets.ModelViewSet):
         if new_status == 'COMPLETED':
             market_request.completed_at = timezone.now()
         market_request.save(using='market_db')
+        if new_status == 'COMPLETED':
+            notify(
+                market_request.client_id, 'Courses terminées',
+                f"Votre demande '{market_request.title}' est terminée.",
+                notification_type='ORDER_STATUS', order_type='MARKET', order_id=market_request.id,
+            )
         return Response(MarketRequestSerializer(market_request).data)
 
     @action(detail=True, methods=['post'])
@@ -173,7 +190,23 @@ class MarketRequestViewSet(viewsets.ModelViewSet):
         market_request.delivery_fee = request.data.get('delivery_fee', market_request.delivery_fee)
         market_request.save(using='market_db')
 
+        notify(
+            livreur_id, 'Nouvelle mission de livraison',
+            f"Une livraison de courses '{market_request.title}' vous attend.",
+            notification_type='ORDER_STATUS', order_type='MARKET', order_id=market_request.id,
+        )
         return Response(MarketRequestSerializer(market_request).data)
+
+    @action(detail=True, methods=['get'], url_path='livreur-position')
+    def livreur_position(self, request, pk=None):
+        """Position GPS du livreur assigné à cette demande (scopée via get_queryset)."""
+        market_request = self.get_object()
+        if not market_request.livreur_id:
+            return Response({'error': 'Aucun livreur assigné.'}, status=400)
+        position = get_livreur_position(market_request.livreur_id)
+        if not position:
+            return Response(None)
+        return Response(position)
 
     @action(detail=True, methods=['post'])
     def update_items(self, request, pk=None):

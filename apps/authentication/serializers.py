@@ -2,7 +2,10 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth import get_user_model
-from .models import User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption
+from .models import (
+    User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption,
+    LivreurPosition, Notification, Conversation, Message,
+)
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -187,7 +190,7 @@ class LivreurPublicSerializer(serializers.ModelSerializer):
 class AddressSerializer(serializers.ModelSerializer):
     class Meta:
         model = Address
-        fields = ['id', 'label', 'full_address', 'city', 'is_default', 'created_at']
+        fields = ['id', 'label', 'full_address', 'city', 'latitude', 'longitude', 'is_default', 'created_at']
         read_only_fields = ['created_at']
 
 
@@ -215,3 +218,50 @@ class PromoRedemptionSerializer(serializers.ModelSerializer):
 
     def get_user_name(self, obj):
         return obj.user.get_full_name() or obj.user.username
+
+
+class LivreurPositionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LivreurPosition
+        fields = ['latitude', 'longitude', 'updated_at']
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = [
+            'id', 'title', 'message', 'notification_type',
+            'order_type', 'order_id', 'is_read', 'created_at',
+        ]
+        read_only_fields = fields
+
+
+class ConversationSerializer(serializers.ModelSerializer):
+    client_name = serializers.SerializerMethodField()
+    assignee_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Conversation
+        fields = [
+            'id', 'order_type', 'order_id', 'client', 'client_name',
+            'assignee', 'assignee_name', 'created_at',
+        ]
+        read_only_fields = fields
+
+    def get_client_name(self, obj):
+        return obj.client.get_full_name() or obj.client.username
+
+    def get_assignee_name(self, obj):
+        return obj.assignee.get_full_name() or obj.assignee.username
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    sender_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Message
+        fields = ['id', 'conversation', 'sender', 'sender_name', 'body', 'created_at']
+        read_only_fields = ['conversation', 'sender', 'created_at']
+
+    def get_sender_name(self, obj):
+        return obj.sender.get_full_name() or obj.sender.username

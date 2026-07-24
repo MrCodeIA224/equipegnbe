@@ -80,3 +80,16 @@ class IsBoutiquierrOrAdmin(BasePermission):
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated and
                     (request.user.role == 'BOUTIQUIERR' or request.user.is_admin))
+
+
+class IsConversationParticipant(BasePermission):
+    """
+    Réservé au client et à l'assigné (livreur/coursier) d'une Conversation.
+    Résolu une seule fois à la création de la conversation (client_id/
+    assignee_id figés dessus) : pas de requête cross-db à chaque message.
+    """
+    def has_object_permission(self, request, view, obj):
+        if request.user.is_admin:
+            return True
+        conversation = obj if hasattr(obj, 'client_id') and hasattr(obj, 'assignee_id') else obj.conversation
+        return request.user.id in (conversation.client_id, conversation.assignee_id)

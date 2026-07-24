@@ -48,3 +48,24 @@ def test_invalid_city_choice_rejected(api_client, client_user):
         'label': 'Test', 'full_address': 'X', 'city': 'VilleInexistante',
     })
     assert resp.status_code == 400
+
+
+def test_address_coordinates_round_trip(api_client, client_user):
+    _auth(api_client, client_user)
+    resp = api_client.post('/api/v1/auth/addresses/', {
+        'label': 'Maison', 'full_address': 'Quartier Almamya', 'city': 'Conakry',
+        'latitude': '9.535000', 'longitude': '-13.679000',
+    })
+    assert resp.status_code == 201
+    assert resp.data['latitude'] == '9.535000'
+    assert resp.data['longitude'] == '-13.679000'
+
+
+def test_address_coordinates_are_optional(api_client, client_user):
+    _auth(api_client, client_user)
+    resp = api_client.post('/api/v1/auth/addresses/', {
+        'label': 'Maison', 'full_address': 'Quartier Almamya', 'city': 'Conakry',
+    })
+    assert resp.status_code == 201
+    assert resp.data['latitude'] is None
+    assert resp.data['longitude'] is None
