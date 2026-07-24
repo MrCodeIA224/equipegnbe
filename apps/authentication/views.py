@@ -20,7 +20,7 @@ from .serializers import (
     LivreurPositionSerializer, NotificationSerializer, ConversationSerializer, MessageSerializer,
 )
 from .permissions import IsAdmin, IsOwnerOrAdmin, IsLivreurOrAdmin, IsConversationParticipant
-from .services import validate_and_apply_promo, open_conversation
+from .services import validate_and_apply_promo, open_conversation, validate_order_reference
 
 
 class LoginView(TokenObtainPairView):
@@ -220,6 +220,13 @@ class LivreurPositionUpdateView(generics.GenericAPIView):
         longitude = request.data.get('longitude')
         if latitude is None or longitude is None:
             return Response({'error': 'latitude et longitude requis.'}, status=400)
+
+        order_type = request.data.get('order_type', '')
+        order_id = request.data.get('order_id')
+        if order_type or order_id:
+            if not (order_type and order_id):
+                return Response({'error': 'order_type et order_id doivent être fournis ensemble.'}, status=400)
+            validate_order_reference(order_type, order_id)
 
         livreur_id = request.data.get('livreur_id') if request.user.is_admin else request.user.id
         LivreurPosition.objects.update_or_create(

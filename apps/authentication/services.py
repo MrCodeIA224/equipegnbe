@@ -116,6 +116,23 @@ def _order_dispatch():
     }
 
 
+def validate_order_reference(order_type, order_id):
+    """
+    Vérifie qu'une commande référencée par (order_type, order_id) existe
+    réellement dans sa base de service. Nécessaire pour tout write path qui
+    accepte order_type/order_id bruts depuis l'utilisateur (ex: mise à jour
+    de position livreur) : sans jointure ORM cross-db possible, rien d'autre
+    n'empêche d'enregistrer une référence orpheline. Lève ValidationError si
+    le type ou l'id est invalide.
+    """
+    dispatch = _order_dispatch()
+    if order_type not in dispatch:
+        raise serializers.ValidationError({'order_type': 'Type de commande invalide.'})
+    db_alias, model, _ = dispatch[order_type]
+    if not model.objects.using(db_alias).filter(id=order_id).exists():
+        raise serializers.ValidationError({'order_id': "Cette commande n'existe pas."})
+
+
 def get_order_participants(order_type, order_id):
     """
     Résout (client_id, assignee_id) pour une commande, quel que soit le
