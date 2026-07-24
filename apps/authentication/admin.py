@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User, LivreurProfile, CoursierProfile
+from .models import User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption
 
 
 class LivreurProfileInline(admin.StackedInline):
@@ -78,3 +78,24 @@ class LivreurProfileAdmin(admin.ModelAdmin):
 @admin.register(CoursierProfile)
 class CoursierProfileAdmin(admin.ModelAdmin):
     list_display = ['user', 'zone', 'rating', 'total_missions']
+
+
+@admin.register(Address)
+class AddressAdmin(admin.ModelAdmin):
+    list_display = ['user', 'label', 'city', 'is_default', 'created_at']
+    list_filter = ['city', 'is_default']
+    search_fields = ['user__username', 'label', 'full_address']
+
+
+@admin.register(PromoCode)
+class PromoCodeAdmin(admin.ModelAdmin):
+    list_display = ['code', 'discount_type', 'value', 'times_used', 'usage_limit', 'is_active', 'expiry_date']
+    list_filter = ['discount_type', 'is_active']
+    search_fields = ['code']
+
+
+@admin.register(PromoRedemption)
+class PromoRedemptionAdmin(admin.ModelAdmin):
+    list_display = ['promo_code', 'user', 'order_type', 'order_id', 'discount_amount', 'redeemed_at']
+    list_filter = ['order_type']
+    search_fields = ['promo_code__code', 'user__username']

@@ -4,6 +4,7 @@ Mise en relation clients / coursiers / livreurs pour faire les courses au march�
 DB: market_db
 """
 from django.db import models
+from config.constants import GUINEA_CITIES
 
 
 class MarketRequest(models.Model):
@@ -30,7 +31,7 @@ class MarketRequest(models.Model):
     title = models.CharField(max_length=200, verbose_name='Titre', default='Mes courses')
     market_name = models.CharField(max_length=200, verbose_name='Marché cible', default='Marché Madina')
     delivery_address = models.TextField(verbose_name='Adresse de livraison')
-    delivery_city = models.CharField(max_length=100, default='Conakry')
+    delivery_city = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry')
 
     budget = models.DecimalField(
         max_digits=12, decimal_places=0, default=0,
@@ -42,6 +43,8 @@ class MarketRequest(models.Model):
     # Frais
     service_fee = models.DecimalField(max_digits=12, decimal_places=0, default=10000, verbose_name='Frais de service (GNF)')
     delivery_fee = models.DecimalField(max_digits=12, decimal_places=0, default=0, verbose_name='Frais de livraison (GNF)')
+    promo_code_used = models.CharField(max_length=30, blank=True, verbose_name='Code promo utilisé')
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=0, default=0, verbose_name='Réduction sur les frais de service (GNF)')
     actual_total = models.DecimalField(max_digits=12, decimal_places=0, default=0, verbose_name='Total réel dépensé (GNF)')
 
     created_at = models.DateTimeField(auto_now_add=True)

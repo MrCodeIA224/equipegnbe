@@ -4,6 +4,7 @@ Gère tous les types d'acteurs de la plateforme.
 """
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from config.constants import GUINEA_CITIES
 
 
 class User(AbstractUser):
@@ -27,7 +28,7 @@ class User(AbstractUser):
         verbose_name='Rôle'
     )
     phone = models.CharField(max_length=20, verbose_name='Téléphone')
-    city = models.CharField(max_length=100, default='Conakry', verbose_name='Ville')
+    city = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry', verbose_name='Ville')
     address = models.TextField(blank=True, verbose_name='Adresse')
     profile_picture = models.ImageField(
         upload_to='profiles/', blank=True, null=True,
@@ -96,7 +97,7 @@ class LivreurProfile(models.Model):
     id_card = models.ImageField(upload_to='livreurs/ids/', blank=True, null=True, verbose_name="Pièce d'identité")
     total_deliveries = models.IntegerField(default=0)
     rating = models.DecimalField(max_digits=3, decimal_places=2, default=5.00)
-    zone = models.CharField(max_length=100, default='Conakry', verbose_name='Zone de livraison')
+    zone = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry', verbose_name='Zone de livraison')
 
     class Meta:
         verbose_name = 'Profil Livreur'
@@ -119,10 +120,92 @@ class CoursierProfile(models.Model):
     )
     total_missions = models.IntegerField(default=0)
     rating = models.DecimalField(max_digits=3, decimal_places=2, default=5.00)
-    zone = models.CharField(max_length=100, default='Conakry')
+    zone = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry')
 
     class Meta:
         verbose_name = 'Profil Coursier'
 
     def __str__(self):
         return f"Coursier: {self.user.get_full_name()}"
+
+
+class Address(models.Model):
+    """Adresse sauvegardée d'un utilisateur, réutilisable lors du checkout."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='addresses')
+    label = models.CharField(max_length=50, verbose_name='Libellé', help_text='Ex: Maison, Bureau...')
+    full_address = models.TextField(verbose_name='Adresse complète')
+    city = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry', verbose_name='Ville')
+    is_default = models.BooleanField(default=False, verbose_name='Adresse par défaut')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Adresse'
+        verbose_name_plural = 'Adresses'
+        ordering = ['-is_default', '-created_at']
+
+    def __str__(self):
+        return f"{self.label} ({self.user.username})"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.is_default:
+            Address.objects.filter(user=self.user, is_default=True).exclude(pk=self.pk).update(is_default=False)
+
+
+class PromoCode(models.Model):
+    """Code promo applicable sur les commandes livraison/marché/boutiques."""
+
+    class DiscountType(models.TextChoices):
+        PERCENTAGE = 'PERCENTAGE', 'Pourcentage'
+        FIXED = 'FIXED', 'Montant fixe'
+
+    code = models.CharField(max_length=30, unique=True, verbose_name='Code')
+    discount_type = models.CharField(max_length=20, choices=DiscountType.choices, default=DiscountType.PERCENTAGE)
+    value = models.DecimalField(max_digits=12, decimal_places=0, verbose_name='Valeur (% ou GNF)')
+    min_order_amount = models.DecimalField(max_digits=12, decimal_places=0, default=0, verbose_name='Montant minimum de commande (GNF)')
+    usage_limit = models.IntegerField(null=True, blank=True, verbose_name='Limite d\'utilisation', help_text='Vide = illimité')
+    times_used = models.IntegerField(default=0)
+    expiry_date = models.DateTimeField(null=True, blank=True, verbose_name='Date d\'expiration', help_text='Vide = pas d\'expiration')
+    applicable_order_types = models.JSONField(
+        default=list,
+        verbose_name='Types de commande concernés',
+        help_text='Sous-ensemble de DELIVERY, MARKET, MARKETPLACE. Vide = tous.'
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Code promo'
+        verbose_name_plural = 'Codes promo'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.code
+
+
+class PromoRedemption(models.Model):
+    """Trace d'utilisation d'un code promo sur une commande (cross-service)."""
+
+    class OrderType(models.TextChoices):
+        DELIVERY = 'DELIVERY', 'Livraison'
+        MARKET = 'MARKET', 'Mon Marché'
+        MARKETPLACE = 'MARKETPLACE', 'Boutiques'
+
+    promo_code = models.ForeignKey(PromoCode, on_delete=models.CASCADE, related_name='redemptions')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='promo_redemptions')
+    order_type = models.CharField(max_length=20, choices=OrderType.choices)
+    # order_id est un entier brut (pas une FK) : la commande vit dans une autre
+    # base (delivery_db/market_db/marketplace_db), voir config/database_router.py.
+    order_id = models.IntegerField(verbose_name='ID de la commande (service concerné)')
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=0)
+    redeemed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Utilisation de code promo'
+        verbose_name_plural = 'Utilisations de codes promo'
+        unique_together = ['promo_code', 'user', 'order_type', 'order_id']
+        ordering = ['-redeemed_at']
+
+    def __str__(self):
+        return f"{self.promo_code.code} - {self.user.username} ({self.order_type} #{self.order_id})"

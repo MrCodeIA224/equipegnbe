@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Restaurant, MenuItem, FoodCategory, DeliveryOrder, DeliveryOrderItem, DeliveryRating
+from .models import Restaurant, MenuItem, FoodCategory, DeliveryOrder, DeliveryOrderItem, DeliveryRating, DeliveryPayment
 
 
 class MenuItemInline(admin.TabularInline):
@@ -68,6 +68,18 @@ class MenuItemAdmin(admin.ModelAdmin):
     list_display = ['name', 'restaurant', 'price', 'is_available', 'is_popular']
     list_filter = ['is_available', 'is_popular', 'restaurant']
     search_fields = ['name', 'restaurant__name']
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).using('delivery_db')
+
+    def save_model(self, request, obj, form, change):
+        obj.save(using='delivery_db')
+
+
+@admin.register(DeliveryPayment)
+class DeliveryPaymentAdmin(admin.ModelAdmin):
+    list_display = ['order', 'method', 'status', 'phone_number', 'confirmed_at']
+    list_filter = ['method', 'status']
 
     def get_queryset(self, request):
         return super().get_queryset(request).using('delivery_db')

@@ -2,7 +2,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth import get_user_model
-from .models import User, LivreurProfile, CoursierProfile
+from .models import User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -182,3 +182,36 @@ class LivreurPublicSerializer(serializers.ModelSerializer):
         if hasattr(obj, 'livreur_profile'):
             return obj.livreur_profile.zone
         return obj.city
+
+
+class AddressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Address
+        fields = ['id', 'label', 'full_address', 'city', 'is_default', 'created_at']
+        read_only_fields = ['created_at']
+
+
+class PromoCodeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PromoCode
+        fields = [
+            'id', 'code', 'discount_type', 'value', 'min_order_amount',
+            'usage_limit', 'times_used', 'expiry_date',
+            'applicable_order_types', 'is_active', 'created_at',
+        ]
+        read_only_fields = ['times_used', 'created_at']
+
+
+class PromoRedemptionSerializer(serializers.ModelSerializer):
+    promo_code_display = serializers.CharField(source='promo_code.code', read_only=True)
+    user_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PromoRedemption
+        fields = [
+            'id', 'promo_code', 'promo_code_display', 'user', 'user_name',
+            'order_type', 'order_id', 'discount_amount', 'redeemed_at',
+        ]
+
+    def get_user_name(self, obj):
+        return obj.user.get_full_name() or obj.user.username

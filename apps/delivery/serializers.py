@@ -1,5 +1,7 @@
+from django.utils import timezone
 from rest_framework import serializers
-from .models import Restaurant, MenuItem, FoodCategory, DeliveryOrder, DeliveryOrderItem, DeliveryRating
+from .models import Restaurant, MenuItem, FoodCategory, DeliveryOrder, DeliveryOrderItem, DeliveryRating, DeliveryPayment
+from apps.authentication.services import validate_and_apply_promo, redeem_promo
 
 
 class FoodCategorySerializer(serializers.ModelSerializer):
@@ -70,21 +72,43 @@ class CreateOrderItemSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True)
 
 
+class PaymentSerializer(serializers.ModelSerializer):
+    method_display = serializers.CharField(source='get_method_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = DeliveryPayment
+        fields = [
+            'method', 'method_display', 'status', 'status_display',
+            'phone_number', 'transaction_reference', 'confirmed_at',
+        ]
+
+
 class CreateDeliveryOrderSerializer(serializers.Serializer):
     restaurant_id = serializers.IntegerField()
     delivery_address = serializers.CharField()
     delivery_city = serializers.CharField(default='Conakry')
     notes = serializers.CharField(required=False, allow_blank=True)
     items = CreateOrderItemSerializer(many=True)
+    payment_method = serializers.ChoiceField(
+        choices=DeliveryPayment.Method.choices, default=DeliveryPayment.Method.CASH_ON_DELIVERY
+    )
+    phone_number = serializers.CharField(required=False, allow_blank=True)
+    promo_code = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
         if not attrs.get('items'):
             raise serializers.ValidationError({'items': 'La commande doit contenir au moins un article.'})
+        if attrs['payment_method'] != DeliveryPayment.Method.CASH_ON_DELIVERY and not attrs.get('phone_number'):
+            raise serializers.ValidationError({'phone_number': 'Numéro de téléphone requis pour ce mode de paiement.'})
         return attrs
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         restaurant_id = validated_data.pop('restaurant_id')
+        payment_method = validated_data.pop('payment_method')
+        phone_number = validated_data.pop('phone_number', '')
+        promo_code = validated_data.pop('promo_code', '')
 
         try:
             restaurant = Restaurant.objects.get(id=restaurant_id)
@@ -122,8 +146,30 @@ class CreateDeliveryOrderSerializer(serializers.Serializer):
             total += unit_price * item_data['quantity']
 
         order.items_total = total
-        order.total_price = total + order.delivery_fee
+        discount_amount = 0
+        promo = None
+        if promo_code:
+            result = validate_and_apply_promo(promo_code, request.user, 'DELIVERY', total)
+            promo = result['promo']
+            discount_amount = result['discount_amount']
+            order.promo_code_used = promo.code
+            order.discount_amount = discount_amount
+
+        order.total_price = total + order.delivery_fee - discount_amount
         order.save(using='delivery_db')
+
+        if promo:
+            redeem_promo(promo, request.user, 'DELIVERY', order.id, discount_amount)
+
+        payment_status = (
+            DeliveryPayment.Status.CONFIRMED if payment_method == DeliveryPayment.Method.CASH_ON_DELIVERY
+            else DeliveryPayment.Status.PENDING
+        )
+        DeliveryPayment.objects.using('delivery_db').create(
+            order=order, method=payment_method, phone_number=phone_number,
+            status=payment_status,
+            confirmed_at=timezone.now() if payment_status == DeliveryPayment.Status.CONFIRMED else None,
+        )
 
         return order
 
@@ -135,6 +181,7 @@ class DeliveryOrderSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     client_name = serializers.SerializerMethodField()
     livreur_name = serializers.SerializerMethodField()
+    payment = PaymentSerializer(read_only=True)
 
     class Meta:
         model = DeliveryOrder
@@ -142,9 +189,9 @@ class DeliveryOrderSerializer(serializers.ModelSerializer):
             'id', 'client_id', 'client_name', 'livreur_id', 'livreur_name',
             'restaurant', 'restaurant_name', 'restaurant_image',
             'status', 'status_display', 'delivery_address', 'delivery_city',
-            'notes', 'items_total', 'delivery_fee', 'total_price',
-            'created_at', 'confirmed_at', 'picked_up_at', 'delivered_at',
-            'order_items'
+            'notes', 'items_total', 'delivery_fee', 'promo_code_used', 'discount_amount',
+            'total_price', 'created_at', 'confirmed_at', 'picked_up_at', 'delivered_at',
+            'order_items', 'payment'
         ]
         read_only_fields = ['client_id', 'created_at']
 

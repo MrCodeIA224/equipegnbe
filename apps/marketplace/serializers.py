@@ -1,5 +1,7 @@
+from django.utils import timezone
 from rest_framework import serializers
-from .models import Category, Shop, Product, MarketplaceOrder, MarketplaceOrderItem, ProductReview
+from .models import Category, Shop, Product, MarketplaceOrder, MarketplaceOrderItem, ProductReview, MarketplacePayment
+from apps.authentication.services import validate_and_apply_promo, redeem_promo
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -80,6 +82,18 @@ class CreateOrderItemSerializer(serializers.Serializer):
     quantity = serializers.IntegerField(min_value=1)
 
 
+class PaymentSerializer(serializers.ModelSerializer):
+    method_display = serializers.CharField(source='get_method_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = MarketplacePayment
+        fields = [
+            'method', 'method_display', 'status', 'status_display',
+            'phone_number', 'transaction_reference', 'confirmed_at',
+        ]
+
+
 class CreateMarketplaceOrderSerializer(serializers.Serializer):
     shop_id = serializers.IntegerField()
     delivery_type = serializers.ChoiceField(choices=['DELIVERY', 'PICKUP'], default='DELIVERY')
@@ -87,17 +101,27 @@ class CreateMarketplaceOrderSerializer(serializers.Serializer):
     delivery_city = serializers.CharField(default='Conakry')
     notes = serializers.CharField(required=False, allow_blank=True)
     items = CreateOrderItemSerializer(many=True)
+    payment_method = serializers.ChoiceField(
+        choices=MarketplacePayment.Method.choices, default=MarketplacePayment.Method.CASH_ON_DELIVERY
+    )
+    phone_number = serializers.CharField(required=False, allow_blank=True)
+    promo_code = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
         if attrs.get('delivery_type') == 'DELIVERY' and not attrs.get('delivery_address'):
             raise serializers.ValidationError({'delivery_address': 'Adresse requise pour la livraison.'})
         if not attrs.get('items'):
             raise serializers.ValidationError({'items': 'La commande doit contenir au moins un article.'})
+        if attrs['payment_method'] != MarketplacePayment.Method.CASH_ON_DELIVERY and not attrs.get('phone_number'):
+            raise serializers.ValidationError({'phone_number': 'Numéro de téléphone requis pour ce mode de paiement.'})
         return attrs
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         shop_id = validated_data.pop('shop_id')
+        payment_method = validated_data.pop('payment_method')
+        phone_number = validated_data.pop('phone_number', '')
+        promo_code = validated_data.pop('promo_code', '')
 
         try:
             shop = Shop.objects.get(id=shop_id)
@@ -145,8 +169,31 @@ class CreateMarketplaceOrderSerializer(serializers.Serializer):
             product.save(using='marketplace_db')
 
         order.items_total = total
-        order.total_price = total + order.delivery_fee
+        discount_amount = 0
+        promo = None
+        if promo_code:
+            result = validate_and_apply_promo(promo_code, request.user, 'MARKETPLACE', total)
+            promo = result['promo']
+            discount_amount = result['discount_amount']
+            order.promo_code_used = promo.code
+            order.discount_amount = discount_amount
+
+        order.total_price = total + order.delivery_fee - discount_amount
         order.save(using='marketplace_db')
+
+        if promo:
+            redeem_promo(promo, request.user, 'MARKETPLACE', order.id, discount_amount)
+
+        payment_status = (
+            MarketplacePayment.Status.CONFIRMED if payment_method == MarketplacePayment.Method.CASH_ON_DELIVERY
+            else MarketplacePayment.Status.PENDING
+        )
+        MarketplacePayment.objects.using('marketplace_db').create(
+            order=order, method=payment_method, phone_number=phone_number,
+            status=payment_status,
+            confirmed_at=timezone.now() if payment_status == MarketplacePayment.Status.CONFIRMED else None,
+        )
+
         return order
 
 
@@ -157,6 +204,7 @@ class MarketplaceOrderSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     client_name = serializers.SerializerMethodField()
     livreur_name = serializers.SerializerMethodField()
+    payment = PaymentSerializer(read_only=True)
 
     class Meta:
         model = MarketplaceOrder
@@ -165,8 +213,8 @@ class MarketplaceOrderSerializer(serializers.ModelSerializer):
             'shop', 'shop_name', 'shop_image',
             'status', 'status_display', 'delivery_type',
             'delivery_address', 'delivery_city', 'notes',
-            'items_total', 'delivery_fee', 'total_price',
-            'created_at', 'delivered_at', 'order_items'
+            'items_total', 'delivery_fee', 'promo_code_used', 'discount_amount', 'total_price',
+            'created_at', 'delivered_at', 'order_items', 'payment'
         ]
         read_only_fields = ['client_id', 'created_at']
 

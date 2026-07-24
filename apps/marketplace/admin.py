@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Category, Shop, Product, MarketplaceOrder, MarketplaceOrderItem, ProductReview
+from .models import Category, Shop, Product, MarketplaceOrder, MarketplaceOrderItem, ProductReview, MarketplacePayment
 
 
 @admin.register(Category)
@@ -62,6 +62,18 @@ class MarketplaceOrderAdmin(admin.ModelAdmin):
     search_fields = ['id', 'delivery_address']
     readonly_fields = ['created_at', 'delivered_at']
     inlines = [OrderItemInline]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).using('marketplace_db')
+
+    def save_model(self, request, obj, form, change):
+        obj.save(using='marketplace_db')
+
+
+@admin.register(MarketplacePayment)
+class MarketplacePaymentAdmin(admin.ModelAdmin):
+    list_display = ['order', 'method', 'status', 'phone_number', 'confirmed_at']
+    list_filter = ['method', 'status']
 
     def get_queryset(self, request):
         return super().get_queryset(request).using('marketplace_db')

@@ -6,7 +6,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.utils import timezone
 
-from .models import Restaurant, MenuItem, FoodCategory, DeliveryOrder, DeliveryOrderItem, DeliveryRating
+from .models import Restaurant, MenuItem, FoodCategory, DeliveryOrder, DeliveryOrderItem, DeliveryRating, DeliveryPayment
 from .serializers import (
     RestaurantSerializer, RestaurantListSerializer, MenuItemSerializer,
     FoodCategorySerializer, DeliveryOrderSerializer, CreateDeliveryOrderSerializer,
@@ -15,6 +15,7 @@ from .serializers import (
 from apps.authentication.permissions import (
     IsAdmin, IsRestaurantOrAdmin, IsLivreurOrAdmin, IsOwnerOrAdmin
 )
+from apps.common.payment_providers import get_provider
 
 
 class FoodCategoryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -189,6 +190,14 @@ class DeliveryOrderViewSet(viewsets.ModelViewSet):
                     status=400
                 )
 
+        if user.role == 'RESTAURANT' and order.status == 'PENDING' and new_status == 'CONFIRMED':
+            payment = getattr(order, 'payment', None)
+            if not payment or payment.status != DeliveryPayment.Status.CONFIRMED:
+                return Response(
+                    {'error': "Paiement non confirmé — impossible d'accepter la commande."},
+                    status=400
+                )
+
         order.status = new_status
         # Timestamps automatiques
         if new_status == 'CONFIRMED':
@@ -233,6 +242,73 @@ class DeliveryOrderViewSet(viewsets.ModelViewSet):
         order.picked_up_at = timezone.now()
         order.save(using='delivery_db')
         return Response(DeliveryOrderSerializer(order).data)
+
+    @action(detail=True, methods=['post'], url_path='payment/initiate')
+    def initiate_payment(self, request, pk=None):
+        """Démarre un paiement Mobile Money simulé (Orange Money / MTN MoMo)."""
+        order = self.get_object()
+        user = request.user
+        if not user.is_admin and order.client_id != user.id:
+            return Response({'error': 'Permission refusée.'}, status=403)
+
+        payment = getattr(order, 'payment', None)
+        if not payment:
+            return Response({'error': 'Aucun paiement associé à cette commande.'}, status=400)
+        if payment.method == DeliveryPayment.Method.CASH_ON_DELIVERY:
+            return Response({'error': 'Cette commande est payée à la livraison.'}, status=400)
+        if payment.status == DeliveryPayment.Status.CONFIRMED:
+            return Response({'error': 'Ce paiement est déjà confirmé.'}, status=400)
+
+        phone = request.data.get('phone_number', payment.phone_number)
+        provider = get_provider(payment.method)
+        result = provider.initiate(phone, order.total_price)
+
+        payment.phone_number = phone
+        payment.transaction_reference = result.transaction_reference
+        payment.otp_code = result.otp_code
+        payment.status = DeliveryPayment.Status.PENDING
+        payment.initiated_at = timezone.now()
+        payment.save(using='delivery_db')
+
+        return Response({
+            'transaction_reference': result.transaction_reference,
+            'simulated_otp': result.otp_code,
+            'message': f"Code envoyé par SMS (simulation {provider.display_name}).",
+        })
+
+    @action(detail=True, methods=['post'], url_path='payment/confirm')
+    def confirm_payment(self, request, pk=None):
+        """Confirme le paiement Mobile Money via le code OTP simulé."""
+        order = self.get_object()
+        user = request.user
+        if not user.is_admin and order.client_id != user.id:
+            return Response({'error': 'Permission refusée.'}, status=403)
+
+        payment = getattr(order, 'payment', None)
+        if not payment or not payment.transaction_reference:
+            return Response({'error': 'Aucun paiement en cours pour cette commande.'}, status=400)
+        if payment.status == DeliveryPayment.Status.CONFIRMED:
+            return Response({'error': 'Ce paiement est déjà confirmé.'}, status=400)
+
+        reference = request.data.get('reference')
+        otp_code = request.data.get('otp_code', '')
+        if reference != payment.transaction_reference:
+            return Response({'error': 'Référence de transaction invalide.'}, status=400)
+
+        provider = get_provider(payment.method)
+        result = provider.confirm(otp_code, payment.otp_code)
+
+        if result.success:
+            payment.status = DeliveryPayment.Status.CONFIRMED
+            payment.confirmed_at = timezone.now()
+            payment.save(using='delivery_db')
+            return Response(DeliveryOrderSerializer(order).data)
+
+        payment.failed_attempts += 1
+        if payment.failed_attempts >= 3:
+            payment.status = DeliveryPayment.Status.FAILED
+        payment.save(using='delivery_db')
+        return Response({'error': 'Code de confirmation incorrect.'}, status=400)
 
     @action(detail=True, methods=['post'])
     def cancel_delivery(self, request, pk=None):

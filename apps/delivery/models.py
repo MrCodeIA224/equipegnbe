@@ -6,6 +6,7 @@ Communication cross-service: les IDs d'utilisateurs référencent la db_auth.
 """
 from django.db import models
 from django.conf import settings
+from config.constants import GUINEA_CITIES
 
 
 class FoodCategory(models.Model):
@@ -32,7 +33,7 @@ class Restaurant(models.Model):
     name = models.CharField(max_length=200, verbose_name='Nom')
     description = models.TextField(verbose_name='Description')
     address = models.CharField(max_length=300, verbose_name='Adresse')
-    city = models.CharField(max_length=100, default='Conakry')
+    city = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry')
     phone = models.CharField(max_length=20)
     image = models.ImageField(upload_to='restaurants/', blank=True, null=True)
     banner = models.ImageField(upload_to='restaurants/banners/', blank=True, null=True)
@@ -103,11 +104,13 @@ class DeliveryOrder(models.Model):
     restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='orders')
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     delivery_address = models.TextField(verbose_name='Adresse de livraison')
-    delivery_city = models.CharField(max_length=100, default='Conakry')
+    delivery_city = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry')
     notes = models.TextField(blank=True, verbose_name='Instructions spéciales')
 
     items_total = models.DecimalField(max_digits=12, decimal_places=0, default=0)
     delivery_fee = models.DecimalField(max_digits=12, decimal_places=0, default=0)
+    promo_code_used = models.CharField(max_length=30, blank=True, verbose_name='Code promo utilisé')
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=0, default=0, verbose_name='Réduction (GNF)')
     total_price = models.DecimalField(max_digits=12, decimal_places=0, default=0)
 
     # Timestamps pour tracking
@@ -149,6 +152,38 @@ class DeliveryOrderItem(models.Model):
     @property
     def subtotal(self):
         return self.unit_price * self.quantity
+
+
+class DeliveryPayment(models.Model):
+    """Paiement (simulé) associé à une commande de livraison."""
+
+    class Method(models.TextChoices):
+        ORANGE_MONEY = 'ORANGE_MONEY', 'Orange Money'
+        MTN_MOMO = 'MTN_MOMO', 'MTN Mobile Money'
+        CASH_ON_DELIVERY = 'CASH_ON_DELIVERY', 'Paiement à la livraison'
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'En attente'
+        CONFIRMED = 'CONFIRMED', 'Confirmé'
+        FAILED = 'FAILED', 'Échoué'
+
+    order = models.OneToOneField(DeliveryOrder, on_delete=models.CASCADE, related_name='payment')
+    method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH_ON_DELIVERY)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    phone_number = models.CharField(max_length=20, blank=True)
+    transaction_reference = models.CharField(max_length=64, blank=True)
+    otp_code = models.CharField(max_length=10, blank=True, verbose_name='Code de confirmation (simulation)')
+    failed_attempts = models.IntegerField(default=0)
+    initiated_at = models.DateTimeField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = 'delivery'
+        verbose_name = 'Paiement livraison'
+
+    def __str__(self):
+        return f"Paiement #{self.order_id} - {self.get_method_display()} ({self.get_status_display()})"
 
 
 class DeliveryRating(models.Model):

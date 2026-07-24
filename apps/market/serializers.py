@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import MarketRequest, MarketItem, CoursierOffer, MarketRating
+from apps.authentication.services import validate_and_apply_promo, redeem_promo
 
 
 class MarketItemSerializer(serializers.ModelSerializer):
@@ -41,7 +42,7 @@ class MarketRequestSerializer(serializers.ModelSerializer):
             'livreur_id', 'livreur_name', 'status', 'status_display',
             'title', 'market_name', 'delivery_address', 'delivery_city',
             'budget', 'notes', 'is_delivery_needed',
-            'service_fee', 'delivery_fee', 'actual_total',
+            'service_fee', 'delivery_fee', 'promo_code_used', 'discount_amount', 'actual_total',
             'created_at', 'completed_at',
             'items', 'offers', 'total_items'
         ]
@@ -85,6 +86,7 @@ class CreateMarketRequestSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True)
     is_delivery_needed = serializers.BooleanField(default=True)
     items = MarketItemSerializer(many=True)
+    promo_code = serializers.CharField(required=False, allow_blank=True)
 
     def validate_items(self, value):
         if not value:
@@ -93,11 +95,28 @@ class CreateMarketRequestSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
+        promo_code = validated_data.pop('promo_code', '')
         request_obj = self.context['request']
+
         market_request = MarketRequest.objects.using('market_db').create(
             client_id=request_obj.user.id,
             **validated_data
         )
+
+        if promo_code:
+            # La réduction s'applique aux frais de service (seul montant connu
+            # à la création - le total réel des courses n'est connu qu'après).
+            result = validate_and_apply_promo(
+                promo_code, request_obj.user, 'MARKET', market_request.service_fee
+            )
+            promo = result['promo']
+            discount_amount = result['discount_amount']
+            market_request.promo_code_used = promo.code
+            market_request.discount_amount = discount_amount
+            market_request.service_fee -= discount_amount
+            market_request.save(using='market_db')
+            redeem_promo(promo, request_obj.user, 'MARKET', market_request.id, discount_amount)
+
         for item_data in items_data:
             MarketItem.objects.using('market_db').create(request=market_request, **item_data)
         return market_request

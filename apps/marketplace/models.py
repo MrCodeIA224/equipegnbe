@@ -4,6 +4,7 @@ Marketplace pour boutiquiers et particuliers.
 DB: marketplace_db
 """
 from django.db import models
+from config.constants import GUINEA_CITIES
 
 
 class Category(models.Model):
@@ -35,7 +36,7 @@ class Shop(models.Model):
     description = models.TextField(verbose_name='Description')
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, related_name='shops')
     address = models.CharField(max_length=300)
-    city = models.CharField(max_length=100, default='Conakry')
+    city = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry')
     phone = models.CharField(max_length=20)
     whatsapp = models.CharField(max_length=20, blank=True)
     image = models.ImageField(upload_to='shops/', blank=True, null=True)
@@ -116,11 +117,13 @@ class MarketplaceOrder(models.Model):
         default='DELIVERY'
     )
     delivery_address = models.TextField(blank=True)
-    delivery_city = models.CharField(max_length=100, default='Conakry')
+    delivery_city = models.CharField(max_length=100, choices=GUINEA_CITIES, default='Conakry')
     notes = models.TextField(blank=True)
 
     items_total = models.DecimalField(max_digits=12, decimal_places=0, default=0)
     delivery_fee = models.DecimalField(max_digits=12, decimal_places=0, default=0)
+    promo_code_used = models.CharField(max_length=30, blank=True, verbose_name='Code promo utilisé')
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=0, default=0, verbose_name='Réduction (GNF)')
     total_price = models.DecimalField(max_digits=12, decimal_places=0, default=0)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -147,6 +150,38 @@ class MarketplaceOrderItem(models.Model):
     @property
     def subtotal(self):
         return self.unit_price * self.quantity
+
+
+class MarketplacePayment(models.Model):
+    """Paiement (simulé) associé à une commande marketplace."""
+
+    class Method(models.TextChoices):
+        ORANGE_MONEY = 'ORANGE_MONEY', 'Orange Money'
+        MTN_MOMO = 'MTN_MOMO', 'MTN Mobile Money'
+        CASH_ON_DELIVERY = 'CASH_ON_DELIVERY', 'Paiement à la livraison'
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'En attente'
+        CONFIRMED = 'CONFIRMED', 'Confirmé'
+        FAILED = 'FAILED', 'Échoué'
+
+    order = models.OneToOneField(MarketplaceOrder, on_delete=models.CASCADE, related_name='payment')
+    method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH_ON_DELIVERY)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    phone_number = models.CharField(max_length=20, blank=True)
+    transaction_reference = models.CharField(max_length=64, blank=True)
+    otp_code = models.CharField(max_length=10, blank=True, verbose_name='Code de confirmation (simulation)')
+    failed_attempts = models.IntegerField(default=0)
+    initiated_at = models.DateTimeField(null=True, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = 'marketplace'
+        verbose_name = 'Paiement marketplace'
+
+    def __str__(self):
+        return f"Paiement #{self.order_id} - {self.get_method_display()} ({self.get_status_display()})"
 
 
 class ProductReview(models.Model):

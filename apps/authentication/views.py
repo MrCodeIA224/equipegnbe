@@ -8,13 +8,15 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Q
 
-from .models import User, LivreurProfile, CoursierProfile
+from .models import User, LivreurProfile, CoursierProfile, Address, PromoCode, PromoRedemption
 from .serializers import (
     CustomTokenObtainPairSerializer, RegisterSerializer, UserSerializer,
     ChangePasswordSerializer, AdminUserSerializer, LivreurPublicSerializer,
-    LivreurProfileSerializer, CoursierProfileSerializer, UserPublicSerializer
+    LivreurProfileSerializer, CoursierProfileSerializer, UserPublicSerializer,
+    AddressSerializer, PromoCodeSerializer, PromoRedemptionSerializer,
 )
 from .permissions import IsAdmin, IsOwnerOrAdmin
+from .services import validate_and_apply_promo
 
 
 class LoginView(TokenObtainPairView):
@@ -150,3 +152,56 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             role='LIVREUR', is_available=True, is_active=True
         ).count()
         return Response(result)
+
+
+class AddressViewSet(viewsets.ModelViewSet):
+    """Adresses sauvegardées de l'utilisateur connecté (carnet d'adresses)."""
+    serializer_class = AddressSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Address.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class PromoCodeValidateView(generics.GenericAPIView):
+    """
+    Prévisualisation d'un code promo au checkout (sans effet de bord).
+    La validation réelle + le décompte d'utilisation se refont côté serializer
+    de création de commande - ne jamais faire confiance à cette preview seule.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        code = request.data.get('code', '')
+        order_type = request.data.get('order_type', '')
+        subtotal = request.data.get('subtotal', 0)
+        result = validate_and_apply_promo(code, request.user, order_type, subtotal)
+        return Response({
+            'valid': True,
+            'discount_amount': result['discount_amount'],
+            'message': f"Code appliqué : -{result['discount_amount']:.0f} GNF",
+        })
+
+
+class PromoCodeViewSet(viewsets.ModelViewSet):
+    """CRUD des codes promo - Admin uniquement."""
+    serializer_class = PromoCodeSerializer
+    permission_classes = [IsAdmin]
+    queryset = PromoCode.objects.all()
+
+    @action(detail=True, methods=['post'])
+    def toggle_active(self, request, pk=None):
+        promo = self.get_object()
+        promo.is_active = not promo.is_active
+        promo.save()
+        return Response({'is_active': promo.is_active})
+
+
+class PromoRedemptionViewSet(viewsets.ReadOnlyModelViewSet):
+    """Historique d'utilisation des codes promo - Admin uniquement (reporting)."""
+    serializer_class = PromoRedemptionSerializer
+    permission_classes = [IsAdmin]
+    queryset = PromoRedemption.objects.select_related('promo_code', 'user').all()
